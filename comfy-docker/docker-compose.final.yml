@@ -1,0 +1,125 @@
+# docker-compose.final.yml  [FINAL v1.0 — 2025-10-15]
+# Использовать путь: E:\SD\ai_stack\comfy-docker\docker-compose.final.yml
+# Назначение: финальная, проверенная конфигурация для WSL2 + Docker Desktop + GPU.
+services:
+
+  comfyui:
+    image: ${COMFY_IMAGE:-mmartial/comfyui-nvidia-docker:latest}
+    container_name: comfyui
+    restart: unless-stopped
+    ports:
+      - "${COMFY_PORT:-8188}:8188"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - ENABLE_XFORMERS=${ENABLE_XFORMERS}
+      - ENABLE_BITSANDBYTES=${ENABLE_BITSANDBYTES}
+      - OFFLOAD_TO_CPU=${OFFLOAD_TO_CPU}
+      - COMFY_WORKDIR=/workspace
+    gpus: all
+    shm_size: "16gb"
+    volumes:
+      # Official runtime (если установлен на C:)
+      - /mnt/c/ComfyUI:/opt/comfy-official:ro
+
+      # Portable сборка и модели (едининая папка на E:)
+      - /mnt/e/SD/ComfyUI-StableDif-t27-p312-cu128-v2.1/ComfyUI/models:/workspace/models:ro
+      - /mnt/e/SD/ComfyUI-StableDif-t27-p312-cu128-v2.1/ComfyUI/custom_nodes:/workspace/custom_nodes:rw
+
+      # Workspace контейнера — для логов/outputs/configs (RW)
+      - /mnt/e/SD/ai_stack/comfyui_workspace:/workspace:rw
+
+      # Доп. общий каталог (если нужен)
+      - /mnt/e/SD/ai_stack/models:/models:ro
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8188/ || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 6
+    networks:
+      - ai-net
+
+  textgen-webui:
+    image: oobabooga/text-generation-webui:latest
+    container_name: textgen-webui
+    restart: unless-stopped
+    ports:
+      - "${TEXTGEN_PORT:-7860}:7860"
+    environment:
+      - TRANSFORMERS_CACHE=/workspace/models
+      - XDG_CACHE_HOME=/workspace/models
+      - USE_BNB=${ENABLE_BITSANDBYTES}
+    gpus: all
+    shm_size: "8gb"
+    volumes:
+      - /mnt/e/SD/ai_stack/textgen_models:/workspace/models:rw
+      - /mnt/e/SD/ai_stack/textgen_config:/workspace/config:rw
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:7860/ || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 6
+    networks:
+      - ai-net
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - ai-net
+
+  unspeech:
+    image: ghcr.io/moeru-ai/unspeech:latest
+    container_name: unspeech
+    restart: unless-stopped
+    ports:
+      - "5933:5933"
+    volumes:
+      - /mnt/e/SD/ai_stack/unspeech_data:/data:rw
+    networks:
+      - ai-net
+
+  camera-service:
+    # Используем RTSP fallback; если появится возможность passthrough, можно раскомментировать devices.
+    image: ghcr.io/your-org/camera-service:latest
+    container_name: camera-service
+    restart: unless-stopped
+    ports:
+      - "8554:8554"
+    environment:
+      - CAMERA_RTSP_URI=${CAMERA_RTSP_URI}
+    volumes:
+      - /mnt/e/SD/ai_stack/camera_data:/data:rw
+    networks:
+      - ai-net
+
+  orchestrator:
+    build: ./orchestrator
+    container_name: orchestrator
+    restart: unless-stopped
+    ports:
+      - "5930:5930"
+    environment:
+      - COMFYUI_URL=http://comfyui:8188
+      - TEXTGEN_URL=http://textgen-webui:7860
+    volumes:
+      - ./orchestrator/config:/app/config:ro
+    depends_on:
+      - comfyui
+      - textgen-webui
+      - qdrant
+    networks:
+      - ai-net
+
+networks:
+  ai-net:
+    driver: bridge
+
+volumes:
+  qdrant_data:
+  models_data:
